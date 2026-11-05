@@ -788,6 +788,11 @@ class KoboPage(QWidget):
         if not self.win.kobo_mount:
             return
         ok, msg = kobo.eject(self.win.kobo_mount)
+        if ok:
+            # Falls der Kobo nur ausgehängt, aber nicht abgeschaltet wurde: nicht sofort wieder einhängen
+            dev = kobo.find_unmounted_kobo()
+            if dev:
+                self.win._mount_failed.add(dev)
         (self.win.toast if ok else lambda m: QMessageBox.warning(self, "Auswerfen", m))(msg)
         if ok:
             self.win.check_kobo(force=True)
@@ -929,6 +934,7 @@ class MainWindow(QMainWindow):
         self.books: list[Book] = []
         self.kobo_mount: Path | None = None
         self.kobo_names: set[str] = set()
+        self._mount_failed: set[str] = set()
         self._scanning = False
         self._after_scan = []
 
@@ -1141,6 +1147,12 @@ class MainWindow(QMainWindow):
     # --- Kobo
     def check_kobo(self, force=False):
         m = kobo.find_kobo()
+        if m is None and not getattr(self, "_mounting", False):
+            dev = kobo.find_unmounted_kobo()
+            if dev is None:
+                self._mount_failed.clear()  # abgesteckt: beim nächsten Anstecken neu versuchen
+            elif dev not in self._mount_failed:
+                self._auto_mount(dev)
         if m == self.kobo_mount and not force:
             return
         changed = m != self.kobo_mount
@@ -1154,6 +1166,22 @@ class MainWindow(QMainWindow):
             self.kobo_names = set()
             self.kobo_pill.setText(f"<span style='color:{style.MUTED}'>○</span>  Kein Kobo verbunden")
             self._kobo_changed()
+
+    def _auto_mount(self, dev: str):
+        """Kobo ist angesteckt, aber niemand hat ihn eingehängt: selbst einhängen."""
+        self._mounting = True
+        self.kobo_pill.setText(f"<span style='color:{style.ACCENT}'>●</span>  Kobo wird eingehängt …")
+
+        def done(_):
+            self._mounting = False
+            self.check_kobo(force=True)
+
+        def fail(msg):
+            self._mounting = False
+            self._mount_failed.add(dev)
+            self.toast(f"Kobo gefunden, aber Einhängen ging nicht: {msg}")
+
+        run_bg(kobo.mount_kobo, dev, done=done, error=fail)
 
     def _kobo_names(self, names):
         self.kobo_names = names

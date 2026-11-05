@@ -42,6 +42,49 @@ def find_kobo() -> Path | None:
     return None
 
 
+def find_unmounted_kobo() -> str | None:
+    """Sucht einen angeschlossenen, aber nicht eingehängten Kobo (z.B. unter Hyprland ohne
+    Automounter). Gibt das Blockgerät zurück, etwa /dev/sdb."""
+    import json
+    try:
+        out = subprocess.run(
+            ["lsblk", "-J", "-o", "PATH,LABEL,FSTYPE,MOUNTPOINTS,VENDOR,MODEL"],
+            capture_output=True, text=True, timeout=5, check=True).stdout
+        devs = json.loads(out).get("blockdevices", [])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+    def walk(nodes, parent_is_kobo=False):
+        for d in nodes:
+            ident = " ".join(str(d.get(k) or "") for k in ("label", "vendor", "model")).lower()
+            is_kobo = parent_is_kobo or "kobo" in ident
+            mounted = any(m for m in (d.get("mountpoints") or []) if m)
+            if is_kobo and d.get("fstype") == "vfat" and not mounted:
+                return d["path"]
+            hit = walk(d.get("children") or [], is_kobo)
+            if hit:
+                return hit
+        return None
+
+    return walk(devs)
+
+
+def mount_kobo(dev: str) -> Path | None:
+    """Kobo per udisksctl einhängen (ohne sudo, wie es ein Dateimanager auch macht)."""
+    try:
+        r = subprocess.run(["udisksctl", "mount", "-b", dev, "--no-user-interaction"],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"udisksctl nicht verfügbar: {e}") from e
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip() or "Einhängen fehlgeschlagen")
+    # Ausgabe: "Mounted /dev/sdb at /run/media/erik/KOBOeReader"
+    out = r.stdout.strip()
+    if " at " in out:
+        return Path(out.split(" at ", 1)[1].rstrip("."))
+    return find_kobo()
+
+
 def kobo_info(mount: Path) -> dict:
     info = {"mount": str(mount), "model": "Kobo", "free": 0, "total": 0}
     try:
