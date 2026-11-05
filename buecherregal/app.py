@@ -1057,7 +1057,7 @@ class MainWindow(QMainWindow):
             return []
 
     def on_kobo(self, b: Book) -> bool:
-        return self.kobo_mount is not None and Path(b.path).stem.lower() in self.kobo_names
+        return self.kobo_mount is not None and kobo.norm_name(Path(b.path).name) in self.kobo_names
 
     def in_library(self, rb: RemoteBook) -> Book | None:
         t = rb.title.lower().strip()

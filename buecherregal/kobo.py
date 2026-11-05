@@ -101,16 +101,24 @@ def kobo_info(mount: Path) -> dict:
     return info
 
 
+def norm_name(filename: str) -> str:
+    """Dateiname für den Vergleich vereinheitlichen: ohne .epub/.kepub, klein, Unicode-normalisiert.
+    So passen 'Buch.epub', 'Buch.kepub.epub' und Umlaute in verschiedener Schreibweise zusammen."""
+    import unicodedata
+    n = unicodedata.normalize("NFC", filename).lower().strip()
+    for suffix in (".epub", ".kepub"):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)]
+    return n
+
+
 def books_on_kobo(mount: Path) -> set[str]:
-    """Dateinamen (ohne Endung, kleingeschrieben) aller Bücher auf dem Kobo."""
+    """Normalisierte Namen (siehe norm_name) aller Bücher auf dem Kobo."""
     names = set()
     for p in mount.rglob("*"):
         if p.is_file() and not any(part.startswith(".") for part in p.relative_to(mount).parts):
-            n = p.name.lower()
-            if n.endswith(".kepub.epub"):
-                names.add(n[: -len(".kepub.epub")])
-            elif n.endswith(".epub"):
-                names.add(n[: -len(".epub")])
+            if p.name.lower().endswith(".epub"):
+                names.add(norm_name(p.name))
     return names
 
 
@@ -124,6 +132,11 @@ def transfer(book_path: str, mount: Path, title: str, author: str, use_kepub: bo
     target_dir = mount / KOBO_SUBDIR
     target_dir.mkdir(exist_ok=True)
     base = Path(book_path).stem
+    if base.lower().endswith(".kepub"):  # schon KEPUB: unverändert kopieren
+        dest = target_dir / Path(book_path).name
+        shutil.copyfile(book_path, dest)
+        os.sync()
+        return str(dest)
     if use_kepub and kepubify_available():
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["kepubify", "-o", tmp, book_path], check=True,
